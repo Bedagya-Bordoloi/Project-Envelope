@@ -1,29 +1,6 @@
 """
 integrations/bacnet_adapter.py
 
-2.1 -- BACnet/hardware bridge story.
-
-Maps the same "final setpoint" that main.py hands to EnergyPlusBridge onto a
-real BACnet WriteProperty request, so the interface Project Envelope uses to
-control a physical BMS point is visibly the same shape as the interface it
-already uses to control the EnergyPlus digital twin: one synchronous
-`write_setpoint(value_c)` call, invoked from the same place
-(EnergyPlusBridge._callback) that calls `set_actuator_value`.
-
-Why this file looks the way it does:
-BAC0 (as of the 2026.x release pinned in requirements.txt) is fully
-asyncio-native -- `BAC0.lite()` internally schedules tasks that require an
-already-*running* event loop, so it can't be called from a plain synchronous
-script the way older BAC0 versions could. Since the rest of this codebase
-(main.py, core/energyplus_bridge.py) is synchronous, this adapter owns a
-single dedicated background thread that runs its own asyncio loop
-(`loop.run_forever()`), and every public method here is a plain blocking
-call that hands work to that loop and waits for the result. Callers never
-need to know BAC0 is async underneath.
-
-BAC0 is an optional dependency -- only imported inside connect(), so a
-build that never enables `bacnet.enabled` in building_policy.yaml doesn't
-need it installed at all.
 """
 
 import asyncio
@@ -36,24 +13,6 @@ class BACnetWriteError(RuntimeError):
 
 
 class BACnetAdapter:
-    """
-    Sync facade over a BAC0 BACnet/IP client device.
-
-    device_ip:      address (and optionally BACnet/IP port, "ip:port") of
-                    the target BMS point -- the real hardware/BMS gateway,
-                    or the virtual point started by
-                    integrations/virtual_bacnet_point.py for testing.
-    point_instance: analogValue instance number of the setpoint point on
-                    that device (e.g. 1 for AV:1).
-    local_ip/local_port: address this adapter's own (virtual) BACnet/IP
-                    device registers as. Must differ from device_ip's port
-                    when testing on loopback, since two BACnet/IP devices
-                    can't share one UDP port on the same interface.
-    priority:       BACnet write priority (1-16, lower = higher priority).
-                    8 ("Manual Operator") is the conventional default for
-                    an automated-but-overridable setpoint command.
-    """
-
     def __init__(self, device_ip, point_instance, local_ip="127.0.0.1",
                  local_port=47820, priority=8, connect_timeout_s=10,
                  io_timeout_s=8):
