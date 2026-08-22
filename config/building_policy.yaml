@@ -6,40 +6,12 @@ safety:
 
 comfort:
   deadband_c: 2.0
-  pmv_band: 0.5          # now actually read by core/sentinel_gate.py's _pmv_violation (was hardcoded 0.5 twice)
+  pmv_band: 0.5          
   outdoor_temp_ewma_alpha: 0.1
-# REMOVED (dead-config audit -- see chat): adaptive_band_half_width_c was
-# declared here but referenced nowhere in the codebase, unlike pmv_band/
-# comfort_ranges which had hardcoded near-duplicates elsewhere that could
-# be wired back up. There's no existing "adaptive band" logic anywhere to
-# attach this to -- keeping it would mean the policy file claims a
-# feature (an adaptive comfort band) that doesn't exist in code. If you
-# want this as a real feature later (e.g. widening/narrowing the PMV
-# band based on carbon intensity or an occupancy signal), re-add it
-# alongside the actual logic that reads it, not before.
-
-# --- STABILITY (Hysteresis) ---
-# FIX (Round-2 audit): min_dwell_steps is counted in STRATEGIST CADENCE
-# TICKS, not raw simulation steps -- SentinelGate._steps_since_change is
-# only incremented inside check(), which only runs once per cadence tick.
-# With the OLD cadence_steps: 300, that made the real dwell time
-# 3 * 300 * 15min ~= 9.4 DAYS, which is why the log showed 9+ day chains
-# of HOLD. With cadence_steps now at 12 (see below), the same
-# min_dwell_steps: 3 means 3 * 12 * 15min = 9 HOURS -- a much more
-# defensible "don't jitter the setpoint for less than half a day" story.
 hysteresis:
   min_delta_c: 0.3
   min_dwell_steps: 3
 
-# --- SEASONAL TARGETS ---
-# FIX: winter_limit was dead config -- agents/strategist.py hardcoded
-# 14/22 directly instead of reading these (same class of bug as the
-# earlier dead carbon-weight fix). Now core/seasonality.classify_season()
-# is the one place both the Strategist's prompt and SentinelGate's
-# baseline-direction guardrail read from. winter_limit is set to 14.0
-# here (not the stale 12.0 that was previously sitting unread) so wiring
-# it up preserves the Strategist's actual previous effective behavior
-# instead of silently narrowing the winter band.
 seasonality:
   winter_limit: 14.0
   summer_limit: 22.0
@@ -58,149 +30,26 @@ gate:
     violation: 0.40
     rate_penalty: 0.15
     llm_confidence: 0.15
-    override_rate: 0.10   # FIX: now actually used -- see core/sentinel_gate.py
-    carbon: 0.20           # FIX: now driven by a real value -- see below
-  # FIX (Round-2 audit): approval used to require a HARD
-  # `violation_severity == 0` regardless of ccs_threshold, which meant
-  # calibrate_ccs_sweep.py's threshold-only sweep could never explain (or
-  # tune away) long FAILSAFE streaks during e.g. a hot spell -- a proposal
-  # 0.01 PMV over the comfort band was rejected no matter what threshold
-  # was picked. 0.0 here reproduces the exact old behavior; raise it
-  # (e.g. 0.05-0.10) if you decide "safety-first, zero PMV violations
-  # ever pass" is too strict for your demo story, and sweep it with
-  # `scripts/calibrate_ccs_sweep.py --violation-tolerances`.
+    override_rate: 0.10 
+    carbon: 0.20   
+
   max_violation_severity: 0.0
-  # Rolling window (in scored decisions, i.e. not counting HOLDs) used to
-  # compute the override_rate CCS term -- see SentinelGate.recent_override_rate.
   override_window: 20
-  # FIX (structural): previously NOTHING enforced that an approved AI
-  # proposal actually moved the setpoint the cheaper direction relative
-  # to baseline -- the Strategist was only asked nicely in a prompt
-  # string. A proposal that drifted the wrong way (even briefly, then
-  # held for hours via hysteresis) could flip cumulative energy into a
-  # loss with no structural guardrail catching it. See
-  # core/seasonality.violates_baseline_direction() for the check and
-  # core/sentinel_gate.py's check() for where it's applied.
-  # FIX: this was the actual headline profit fix for this round, but it
-  # shipped set to `false` -- i.e. built, wired through main.py and
-  # sentinel_gate.py, and completely inert. With it off, an LLM proposal
-  # that drifts the wrong direction relative to baseline (e.g. a winter
-  # setpoint warmer than the fixed 22.0C schedule -- which can only pull
-  # MORE heating energy than baseline, never less) still sails through as
-  # long as it clears CCS + comfort, exactly the "flip cumulative energy
-  # into a loss with no structural guardrail catching it" failure mode
-  # this whole feature exists to close. Turned on: a proposal in the wrong
-  # direction is REJECTED before it ever reaches the actuator, regardless
-  # of how confident the LLM's reasoning sounded.
   enforce_baseline_direction: true
   baseline_direction_tolerance_c: 0.1
 
 # --- STRATEGIST ---
 strategist:
-  # FIX (post-Round-3): "llama-3.1-8b-instant" was deprecated by Groq on
-  # 2026-06-17 and fully shut down 2026-08-16 -- calls to it now return a
-  # 404 "model_not_found". openai/gpt-oss-20b is Groq's own recommended
-  # replacement (fast/small tier, same role in this project). If you're
-  # reading this well after Aug 2026, run
-  # `curl https://api.groq.com/openai/v1/models -H "Authorization: Bearer $GROQ_API_KEY"`
-  # (or check console.groq.com/docs/models) to confirm this string is
-  # still active before assuming it's still correct.
   model: "openai/gpt-oss-20b"
-  # FIX (Round-2 audit): 300 steps = 300 * 15min = 75 HOURS (3.1 days)
-  # between Strategist calls -- far too sparse for a system pitched as
-  # "adaptive, weather-responsive." 12 steps = 12 * 15min = 3 HOURS,
-  # which is in the defensible 1-4h range and still keeps annual Groq
-  # call volume very manageable (35,040 / 12 ~= 2,920 calls/year vs.
-  # 35,040/4 ~= 8,760 at the aggressive end of that range). Tune this
-  # against your Groq rate-limit tier if you go lower.
   cadence_steps: 12
-  # FIX (Priority 3a -- token-budget audit, see chat/blueprint Section 3):
-  # a REJECTED proposal always triggered a second real Groq call (the
-  # correction pass), even when the rejected setpoint was only a hair
-  # away from the current one -- e.g. a 0.05C PMV-band overshoot that a
-  # second LLM call is very unlikely to meaningfully re-reason its way
-  # out of before the wall-clock/timeout budget runs out anyway. That
-  # doubled token spend on exactly the ticks least likely to benefit
-  # from it, which is what actually exhausts the daily TPD quota (see
-  # check_llm_connectivity.py's 199950/200000 reading). If the rejected
-  # proposal's delta from the CURRENT setpoint is <= this many degrees C,
-  # skip the second call entirely and drop straight to FAILSAFE for this
-  # tick -- a fresh cadence tick a few hours later gets a full-budget
-  # correction attempt if it still needs one. Set to 0.0 to disable
-  # (always attempt correction, i.e. old behavior).
   correction_skip_delta_c: 0.15
-  # Priority 3b (blueprint Section 1.6/3): OPTIONAL second reasoning tier,
-  # tried ONLY when the primary Groq call's failure was specifically a
-  # rate limit -- see agents/strategist.py's decide(). This must be a
-  # genuinely DIFFERENT provider (Together.ai, Fireworks, Cerebras,
-  # OpenRouter all expose an OpenAI-compatible /v1 endpoint that Groq's
-  # own SDK can call via base_url) -- NOT a second Groq account/key; the
-  # blueprint's Section 3 explains why pooling multiple Groq keys for one
-  # project is a ToS anti-circumvention risk while a different provider's
-  # free tier is not. Off by default. Enabling this with no matching
-  # api_key_env set in your environment just logs a warning at startup
-  # and runs on the primary provider only -- it will not crash the run.
   secondary_provider:
-    # Wired to Gemini's OpenAI-compatibility endpoint (confirmed live via
-    # web search: https://ai.google.dev/gemini-api/docs/openai). This is
-    # a genuinely separate provider/quota from Groq -- not a second Groq
-    # key -- so it doesn't carry the ToS risk the blueprint's Section 3
-    # flags for pooling multiple Groq accounts.
-    #
-    # CAVEAT (same one the blueprint calls out in Section 1.6 -- read
-    # this before your demo, not during it): Gemini's compatibility docs
-    # confirm tool_choice="auto" works, but agents/strategist.py forces a
-    # SPECIFIC tool via tool_choice={"type":"function","function":
-    # {"name":"set_hvac"}} -- that exact forced form isn't independently
-    # confirmed against Gemini's endpoint. Run
-    # `python scripts/check_secondary_provider.py` once with a real key
-    # before relying on this live. If forced tool_choice doesn't work,
-    # this fails closed (falls through to the hardcoded physical-target
-    # fallback, same as any other secondary-tier error) -- it will not
-    # crash the run, just silently not help until it's fixed.
     enabled: true
     base_url: "https://generativelanguage.googleapis.com/v1beta/openai/"
     api_key_env: "SECONDARY_LLM_API_KEY"
-    # BUGFIX (this round): gemini-2.5-flash started 404ing with "no longer
-    # available to new users" -- Google deprecated it and the error
-    # response itself names the replacement. Every secondary-provider call
-    # was failing on this, not on quota, which is why the log showed a
-    # NotFoundError suffix after every Groq rate limit instead of a
-    # genuine secondary-tier rescue. If this model also ages out later,
-    # the fix is the same: read the 404 body, it names the current model.
-    model: "gemini-3.6-flash"  # check https://ai.google.dev/gemini-api/docs/models
-                                 # for the current list if this 404s again
-    # Per-provider pace limit for THIS provider's own account, mirroring
-    # max_requests_per_minute below but scoped to Gemini's free-tier
-    # budget specifically (do not reuse Groq's number here -- see
-    # core/provider_pool.py's _RateLimiter, one instance per provider).
+    model: "gemini-3.6-flash"
     rpm: 15
-    # ROUND 7 FIX: proactive requests-per-day budget for THIS provider
-    # (see strategist.rpd's comment above and core/provider_pool.py's
-    # module docstring for the full reasoning). Left at 0 (untracked)
-    # by default -- Gemini's free-tier RPD varies by model/region and
-    # isn't as reliably published as Groq's, so this ships conservative
-    # rather than guess wrong. The REACTIVE protection (parsing a 429's
-    # own error text for daily-quota language) still applies to this
-    # provider regardless of whether rpd is set here. Set this once
-    # you've confirmed your account's real daily cap.
     rpd: 0
-  # Rework Blueprint 5.4 -- Phase 4: generalizes the binary Groq-primary/
-  # Gemini-secondary fallback above into an N-provider round-robin pool
-  # (core/provider_pool.py's ProviderPool). The primary (Groq, `model`
-  # above) and secondary_provider (Gemini, above) are ALWAYS folded into
-  # the pool automatically by agents/strategist.py's
-  # _build_provider_pool() -- you don't repeat them here. This section
-  # only lists ADDITIONAL providers beyond those two.
-  #
-  # Both entries below are OFF by default (no API keys shipped, same
-  # fail-safe convention as secondary_provider above -- enabling one with
-  # no matching api_key_env set just logs a warning at startup and skips
-  # that provider, it will not crash the run). Flip `enabled: true` and
-  # set the matching env var in .env to actually add a provider to the
-  # pool. Per the blueprint's ToS note (Section 5.4): these must each be
-  # a genuinely separate provider/account -- never a second key on an
-  # account you're already using elsewhere in this pool.
   provider_pool:
     additional_providers:
       - name: cerebras
@@ -209,130 +58,32 @@ strategist:
         api_key_env: "CEREBRAS_API_KEY"
         model: "llama3.1-8b"
         rpm: 30
-        # ROUND 7 FIX: proactive daily-request budget, same convention as
-        # strategist.rpd/secondary_provider.rpd above. 0 = untracked
-        # (reactive mark_daily_exhausted() still applies) -- set once
-        # confirmed against your Cerebras account's real daily cap.
         rpd: 0
       - name: openrouter
         enabled: false
         base_url: "https://openrouter.ai/api/v1"
         api_key_env: "OPENROUTER_API_KEY"
-        # Pick any free-tier model from https://openrouter.ai/models?max_price=0
-        # and confirm forced tool_choice works against it first (same
-        # caveat as secondary_provider above) -- OpenRouter proxies many
-        # underlying models and not all of them support forced tool
-        # calls identically.
         model: "meta-llama/llama-3.1-8b-instruct:free"
         rpm: 15
-        # ROUND 7 FIX: see cerebras.rpd above -- same convention.
         rpd: 0
-  # FIX: this is SIMULATED cadence, not real-time pacing -- EnergyPlus
-  # can run a 15-min zone timestep in a tiny fraction of a real second,
-  # so even a "conservative" 3-simulated-hour cadence can still fire a
-  # burst of real Groq calls within a handful of real wall-clock seconds
-  # once the sim is running at speed. agents/strategist.py's rate
-  # limiter uses this to keep REAL calls under Groq's actual per-minute
-  # budget regardless of how fast the simulation itself is running --
-  # without it, the account's free-tier ~30 req/min budget gets blown in
-  # the first few real seconds and never recovers for the rest of the
-  # run (every call after that permanently falls back). Keep a few
-  # requests of headroom under your account's real per-minute limit
-  # (console.groq.com/settings/limits) since the correction pass can
-  # add a second real call on the same tick.
-  # NOTE (Phase 4): this is specifically the PRIMARY (Groq) provider's
-  # rpm inside the pool -- each other provider paces itself using its
-  # own `rpm` key (see secondary_provider.rpm and provider_pool.
-  # additional_providers[].rpm above), because they're independent
-  # accounts with independent budgets (core/provider_pool.py's
-  # _RateLimiter is one-instance-per-provider for exactly this reason).
   max_requests_per_minute: 25
-  # ROUND 7 FIX -- see core/provider_pool.py's module docstring and
-  # ROUND7_FIXES.md for the full story: mark_requests_per_minute above
-  # only paces the PER-MINUTE budget. Groq's openai/gpt-oss-20b free
-  # tier separately caps at 1,000 REQUESTS PER DAY and 200,000 TOKENS
-  # PER DAY -- neither was tracked anywhere before this round, which is
-  # exactly what let dashboard runs reach "Groq AND Gemini both 429ing
-  # every tick from step ~348 onward." This is the primary (Groq)
-  # provider's proactive daily-request budget -- ProviderPool stops
-  # routing to it once this many real calls have been sent in its own
-  # rolling 24h window, instead of finding out via a wasted 429
-  # round-trip each time. 0 disables proactive tracking (the reactive
-  # mark_daily_exhausted() path -- triggered by parsing a 429's own
-  # error text -- still protects you either way). Verify this number
-  # against console.groq.com/settings/limits for your account tier
-  # before a long/real demo run.
   rpd: 1000
   call_timeout_s: 10
   correction_timeout_s: 5
   forecast_lookahead_hours: 3
-  # Rework Blueprint 5.5 -- Phase 1: state-bin decision cache. See
-  # core/decision_cache.py's module docstring for the full reasoning.
-  # This does NOT change cadence_steps or skip SentinelGate -- it only
-  # skips the real Strategist/LLM call on a cadence tick when a recent,
-  # already-APPROVED decision exists for a "close enough" state bin.
-  # Off by default so existing runs/behavior are unaffected until you
-  # opt in.
   decision_cache:
     enabled: true
-    indoor_bin_c: 0.5      # indoor-temp bucket width
-    outdoor_bin_c: 1.0     # outdoor-temp bucket width
-    hour_bin_h: 3.0        # time-of-day bucket width (hours)
-    # Rework Blueprint 5.2: as of Phase 2, "ticks" here means "slow-loop
-    # firings" (core/trigger_engine.py), a superset of the old "cadence
-    # ticks" now that firings aren't only at fixed cadence -- see
-    # main.py's ProjectEnvelope.__init__ (self._decision_counter) and
-    # core/decision_cache.py's module docstring.
+    indoor_bin_c: 0.5   
+    outdoor_bin_c: 1.0  
+    hour_bin_h: 3.0     
+
     ttl_ticks: 4
-  # Rework Blueprint 5.2 -- Phase 2: event-triggered scheduler. Replaces
-  # the old `if step % cadence_steps != 0: Holding` gate with a trigger
-  # evaluator that fires the slow (Strategist) loop on deviation /
-  # forecast-shift / schedule-boundary / max-staleness instead of a blind
-  # fixed clock -- see core/trigger_engine.py's module docstring for the
-  # full reasoning and the MPC/event-triggered-control grounding
-  # (Blueprint Section 4). `cadence_steps` above is kept and still used
-  # as a fallback ceiling (cadence_ceiling reason) even with this enabled.
-  #
-  # enabled: false reproduces the OLD fixed-cadence-only behavior exactly
-  # (fires only on cadence_steps multiples) -- flip to true to get the
-  # actual Phase 2 behavior.
   trigger:
     enabled: true
-    # ROUND 7 FIX: widened from 0.4 -> 0.8. Dashboard runs showed this
-    # firing almost every cadence tick during ordinary winter drift
-    # (nowhere near "only large temperature shifts get a real call," the
-    # blueprint's own framing in Section 5 -- see ROUND7_FIXES.md), which
-    # is a real contributor to hitting Groq's 1,000-request/200,000-token
-    # DAILY cap early in a run (see strategist.rpd's comment and
-    # core/provider_pool.py's module docstring for the daily-cap fix
-    # itself). 0.8C keeps the deviation trigger meaningful (a real
-    # thermal-comfort-relevant drift) without firing on every minor
-    # wobble. Deviation trigger: |t_in - t_in @ last decision| > this ->
-    # replan.
     deviation_deadband_c: 0.8
-    # ROUND 7 FIX: widened from 1.5 -> 3.0, same reasoning as
-    # deviation_deadband_c above -- still comfortably catches genuine
-    # storm fronts / morning ramps without replanning on routine hourly
-    # outdoor noise. Forecast-shift trigger: |t_out - t_out @ last
-    # decision| > this -> replan.
     outdoor_delta_threshold_c: 3.0
-    # Max-staleness trigger: hard ceiling on steps since the last real
-    # decision, even if nothing else ever fires (a perfectly quiet
-    # night). At the default cadence_steps: 12, 96 steps = 8 cadence
-    # ticks = 24 simulated hours -- generous compared to the old fixed
-    # 3-hour cadence, since the point of this phase is that most ticks
-    # shouldn't need a fresh LLM call at all when nothing has changed.
     max_staleness_steps: 96
-    # Debounce/coalesce: suppress a new firing within this many steps of
-    # the last one (prevents rapid re-firing from a value oscillating
-    # right at deviation_deadband_c/outdoor_delta_threshold_c) -- never
-    # suppresses max_staleness, which is a hard ceiling.
     debounce_steps: 2
-  # Minutes per physical EnergyPlus step -- models/controlled.idf declares
-  # `Timestep,4` (4 zone timesteps/hour = 15 min/step). Only used to turn
-  # step_counter into an hour-of-day for the decision cache's time-of-day
-  # bucket; does not affect EnergyPlus itself. Override if you ever change
-  # the idf's Timestep object.
   timestep_minutes: 15
 
 # --- FAILSAFE (The missing key that caused the error) ---
@@ -342,12 +93,6 @@ failsafe:
   setback_c: 1.0
 
 # --- BACNET HARDWARE BRIDGE (2.1) ---
-# Disabled by default -- flip enabled: true to mirror every approved AI
-# setpoint to a real BACnet BMS point (or the free virtual point started
-# by integrations/virtual_bacnet_point.py). device_ip can be "host:port"
-# when the target isn't on BACnet/IP's default 47808 (as it won't be when
-# testing against the virtual point locally). local_port must differ from
-# device_ip's port when both are on the same loopback interface.
 bacnet:
   enabled: false
   device_ip: "127.0.0.1:47830"
@@ -361,20 +106,10 @@ baseline:
   schedule_setpoint_c: 22.0
 
 # --- MULTI-ZONE (1.1) ---
-# Used only by `python main.py --multizone`. Must match the zone names
-# baked into models/two_zone_controlled.idf by
-# scripts/patch_idf.py's patch_two_zone() (MULTI_ZONE_NAMES there).
 multizone:
   zone_names: ["ZONE ONE", "ZONE TWO"]
 
 # --- CARBON SIGNAL ---
-# Explicitly simulated (not a live grid API) -- see
-# bms_mcp/tools.py:carbon_intensity_level() and carbon_score_from_level().
-# `profile`/`profiles`/`cycle_steps` control the Low/Medium/High label
-# cycle; `score_map` is the FIX that gives the CCS gate's 20%-weighted
-# carbon term an actual varying numeric input instead of a hardcoded 0.8
-# constant. Higher score = more favorable (lower-emissions) grid
-# conditions.
 carbon:
   profile: "flat_medium"
   profiles:
