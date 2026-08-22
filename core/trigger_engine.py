@@ -1,55 +1,6 @@
 """
 core/trigger_engine.py
 
-Rework Blueprint 5.2 -- Phase 2: event-triggered scheduler, replacing the
-fixed `if step % cadence_steps != 0: return ..., "Holding"` gate in
-main.py with a trigger evaluator that fires the slow (Strategist) loop
-only when something has actually changed enough to justify re-reasoning
-about it -- the classic MPC "replan on deviation, not on a clock" idea
-(see the blueprint's Section 4 industry grounding).
-
-Four triggers, ANY of which schedules a slow-loop call:
-
-  - deviation:         |t_in - t_in @ last decision| > deviation_deadband_c
-  - forecast_shift:    |t_out - t_out @ last decision| > outdoor_delta_threshold_c
-  - schedule_boundary: season classification changed, OR the day/night
-    schedule boundary (see DAY_START_HOUR/NIGHT_START_HOUR below) was
-    crossed since the last decision.
-  - max_staleness:     steps since the last decision >= max_staleness_steps
-    (hard ceiling -- guarantees an upper bound on reasoning latency even
-    on a perfectly quiet night where nothing else ever fires).
-
-What "last decision" means here: the physical step / t_in / t_out /
-season AT THE MOST RECENT TIME THE SLOW LOOP ACTUALLY RAN (whether that
-run resulted in a real LLM call or a decision-cache hit) -- NOT the last
-time this evaluator was merely called. See main.py's wiring:
-`note_decision()` is only invoked after the slow loop actually executes,
-never on a step where evaluate() returned False.
-
-Why "schedule_boundary" uses a day/night split instead of an occupancy
-flag: same reasoning as core/decision_cache.py's module docstring -- this
-codebase has no occupancy signal anywhere. DAY_START_HOUR/NIGHT_START_HOUR
-(06:00/22:00 by default) stand in for "occupancy likely changed" until a
-real occupancy signal exists.
-
-Debounce/coalesce: if more than one trigger condition is true in the same
-evaluate() call, ONE reason is reported (highest priority in the order
-above) -- there is only ever one real Strategist call per slow-loop
-firing regardless of how many reasons justified it. `debounce_steps`
-additionally suppresses a new firing within N steps of the last firing
-(the Nagle's-algorithm-style coalescing the blueprint calls for), so a
-state oscillating right at a threshold doesn't fire every single step --
-except max_staleness, which is a hard ceiling and is never suppressed by
-debounce.
-
-`cadence_steps` (config/building_policy.yaml's pre-existing
-strategist.cadence_steps) is kept as a fallback ceiling alongside
-max_staleness_steps, exactly per the Phase 1 payoff note in the
-blueprint's phased table ("keep current cadence as a fallback ceiling").
-It also still governs `main.py`'s decision-cache TTL unit conversion
-(cache TTL is expressed in "slow-loop firings", a superset of the old
-"cadence ticks" now that firings aren't only at fixed cadence -- see
-main.py's ProjectEnvelope.decide()).
 """
 
 DAY_START_HOUR = 6.0
