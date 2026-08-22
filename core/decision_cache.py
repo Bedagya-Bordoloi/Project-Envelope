@@ -1,7 +1,7 @@
 """
 core/decision_cache.py
 
-Rework Blueprint 5.5 -- Phase 1: state-bin decision cache.
+Phase 1: state-bin decision cache.
 
 Generalizes the existing "HOLD: change too small" idea (SentinelGate's
 hysteresis dwell logic, core/sentinel_gate.py) from "identical to the
