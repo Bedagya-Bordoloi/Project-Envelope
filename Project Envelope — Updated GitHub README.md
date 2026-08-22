@@ -18,7 +18,6 @@ The system operates as a strict **SENSE → REASON → VERIFY → ACT** supervis
 *   **Reflective Self-Correction:** When the Governor rejects a proposal, the rejection reason is injected into the next prompt, allowing the LLM to learn from its "mistake" and submit a corrected setpoint within the same control step.
   
 *   **ASHRAE-55 PMV Comfort:** We use the `pythermalcomfort` library to score comfort based on temperature, humidity, and metabolic rates (clo), rather than simple static temperature bounds.
-
 [NOTE: ASHRAE standard 55 specifies the combinations of indoor thermal and personal factors that produce acceptable thermal comfort for at least 80% of building occupants. ASHRAE 55, PMV (Predicted Mean Vote) is an index that predicts the average thermal sensation (warmth or coolness)] 
   
 *   **Live Counterfactual Overlay:** The system runs two EnergyPlus instances in parallel — a **Baseline** schedule and the **AI-Gated** controller — plotting both curves live on a Streamlit dashboard.
