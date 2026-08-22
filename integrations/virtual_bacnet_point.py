@@ -1,25 +1,5 @@
 """
 integrations/virtual_bacnet_point.py
-
-A free, local stand-in for the real BMS hardware point that
-integrations/bacnet_adapter.py writes to -- so the adapter and its
-write-then-read-back verification (scripts/test_bacnet_adapter.py) can be
-demoed and tested without any physical BACnet gateway, matching the
-blueprint's "test against a free BACnet simulator... rather than real
-hardware" guidance.
-
-Starts a second local BACnet/IP device (on its own port, since it's a
-separate "device" on the loopback segment from the adapter's own device)
-exposing one commandable analogValue point -- the same object type/shape a
-real BMS analog setpoint point would expose. A real deployment simply
-points BACnetAdapter.device_ip at the actual gateway/controller instead of
-at this script.
-
-Run standalone to leave a live point up for manual poking (e.g. with the
-YABE BACnet browser, or scripts/test_bacnet_adapter.py in another
-terminal):
-
-    python integrations/virtual_bacnet_point.py
 """
 
 import asyncio
