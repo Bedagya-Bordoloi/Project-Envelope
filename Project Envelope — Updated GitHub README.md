@@ -16,15 +16,25 @@ The system operates as a strict **SENSE → REASON → VERIFY → ACT** supervis
 ## 🚀 Key Differentiators
 
 *   **Reflective Self-Correction:** When the Governor rejects a proposal, the rejection reason is injected into the next prompt, allowing the LLM to learn from its "mistake" and submit a corrected setpoint within the same control step.
+  
 *   **ASHRAE-55 PMV Comfort:** We use the `pythermalcomfort` library to score comfort based on temperature, humidity, and metabolic rates (clo), rather than simple static temperature bounds.
+  
 *   **Live Counterfactual Overlay:** The system runs two EnergyPlus instances in parallel — a **Baseline** schedule and the **AI-Gated** controller — plotting both curves live on a Streamlit dashboard.
+  
 *   **Model Context Protocol (MCP):** A FastMCP server standardizes building tools such as `get_state`, `set_hvac`, and `get_weather`.
+  
 *   **Sentinel Gate Safety Governor:** Every AI proposal is evaluated using a **Critical Control Score (CCS)** incorporating comfort, stability, LLM confidence, and carbon considerations. The current approval threshold is **0.65**.
+  
 *   **Fast Safety Surveillance:** A lightweight safety check runs on every physical EnergyPlus step before the slower reasoning loop, allowing hard safety excursions to trigger an immediate failsafe response.
+  
 *   **Event-Triggered Reasoning:** The controller no longer depends solely on blind fixed-cadence LLM calls. Reasoning can be triggered by meaningful indoor deviation, forecast shifts, schedule boundaries, or maximum staleness.
+  
 *   **Decision Cache:** Recently approved decisions can be reused for sufficiently similar state bins, reducing unnecessary LLM calls while still re-verifying the cached proposal against current measurements.
+  
 *   **Multi-Provider Resilience:** The primary Groq provider can be supplemented by independently-owned secondary/additional providers through the `ProviderPool`, improving resilience against provider-specific rate limits and outages.
+  
 *   **Defined BACnet Integration Path:** A `BACnetAdapter` (`integrations/bacnet_adapter.py`) mirrors every approved setpoint to a BACnet/IP analogValue point and can be tested end-to-end against the local virtual BACnet point.
+  
 *   **Multi-Zone Generalization:** `python main.py --multizone` runs two independently-actuated zones in one process, each with its own Strategist + Sentinel Gate + Failsafe stack.
 
 ---
