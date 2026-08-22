@@ -474,13 +474,13 @@ The Streamlit dashboard provides live visibility into the interaction between En
 
 ### Dashboard Overview
 
-![Dashboard Overview](assests/dashboard_overview.jpg)
+![Dashboard Overview](images/dashboard.jpg)
 
 *Figure 1: Real-time alignment of AI vs. Baseline energy curves and indoor-temperature behavior.*
 
 ### Explainable Decision Log
 
-![Decision Log](assests/decision_log.jpg)
+![Decision Log](images/table.jpg)
 
 *Figure 2: Explainable AI decision log showing Sentinel Gate approvals, holds, fallbacks, setpoints, and reasons.*
 
@@ -490,7 +490,7 @@ The Streamlit dashboard provides live visibility into the interaction between En
 
 The following demo presents the live working system:
 
-[Click here to watch the demo video](https://drive.google.com/file/d/1mr0sxNNNSCR1TodRuRMqV35PI54Au_KI/view?usp=sharing)
+[Click here to watch the demo video](https://drive.google.com/file/d/1sTPpB_0qOkyoTquN4oiMfg0Zzgqr6WJ5/view?usp=sharing)
 
 ---
 
