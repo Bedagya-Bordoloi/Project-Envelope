@@ -1,8 +1,6 @@
 """
 scripts/find_forecast_spike.py
 
-Blueprint 1.3 -- forward look-ahead demo moment.
-
 Step 1: scan the loaded .epw for a real outdoor-temp spike (a jump of
 several degrees C within a few hours), matching the threshold that
 agents/strategist.py's Strategist._check_lookahead() now actually uses
