@@ -578,18 +578,6 @@ which demonstrates reuse of the Sentinel Gate architecture in a non-HVAC control
 
 ---
 
-## 📚 Project Documentation
-
-Additional implementation documentation is available in:
-
-*   `ARCHITECTURE.md` — technical architecture and supervisory-control design
-*   `DEMO_REHEARSAL.md` — demonstration procedure
-*   `ROUND3_FIXES.md` — implementation fixes
-*   `ROUND6_FIXES.md` — implementation fixes
-*   `ROUND7_FIXES.md` — provider/safety/control-loop fixes
-
----
-
 ## 🚀 Project Status
 
 Project Envelope currently demonstrates:
