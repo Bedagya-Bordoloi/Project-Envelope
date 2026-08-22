@@ -5,15 +5,15 @@
 
 ---
 
-## 🎯 Project Vision
+## Project Vision
 
-Project Envelope is a closed-loop Building Management System where **EnergyPlus runs the real physics**, a Groq-hosted **GPT-OSS-20B** model proposes energy-saving HVAC setpoints through real tool-calling, and a calibrated safety gate (**Sentinel Gate**) decides whether to trust each proposal.
+Project Envelope is a closed-loop Building Management System where **EnergyPlus runs the real physics**, a Groq-hosted **GPT-OSS-20B** model proposes energy-saving HVAC setpoints (Heating, Ventilation and Air Conditioning) through real tool-calling, and a calibrated safety gate (**Sentinel Gate**) decides whether to trust each proposal.
 
 Unlike "black box" AI controllers, Envelope is **explainable by design**: it rejects unsafe proposals with plain-language reasons, feeds those reasons back to the LLM for self-correction, and falls back to a local rule-based controller if the cloud disappears.
 
 The system operates as a strict **SENSE → REASON → VERIFY → ACT** supervisory-control loop around the local BMS rather than replacing it. EnergyPlus provides live building state and forecast information, the Strategist reasons about HVAC actions, the Sentinel Gate verifies every proposal, and only approved actions reach the simulated or connected actuator layer.
 
-## 🚀 Key Differentiators
+## Key Differentiators
 
 *   **Reflective Self-Correction:** When the Governor rejects a proposal, the rejection reason is injected into the next prompt, allowing the LLM to learn from its "mistake" and submit a corrected setpoint within the same control step.
   
@@ -39,7 +39,7 @@ The system operates as a strict **SENSE → REASON → VERIFY → ACT** supervis
 
 ---
 
-## 🛠️ Setup & Installation
+## Setup & Installation
 
 ### Prerequisites
 
@@ -110,7 +110,7 @@ for active HVAC control.
 
 ---
 
-## 🏃 Running the Simulation
+## Running the Simulation
 
 For the full demo experience, open three terminals with the virtual environment activated.
 
@@ -145,7 +145,7 @@ The dashboard provides live visibility into:
 
 ---
 
-## 🧩 Running the Multi-Zone Demo
+## Running the Multi-Zone Demo
 
 To prove that the control pattern generalizes beyond a single room, `main.py` can drive **two independent zones** in one process, each with its own Strategist + Sentinel Gate + Failsafe stack:
 
@@ -166,7 +166,7 @@ Because each zone has its own gate instance, one zone's proposal may be approved
 
 ---
 
-## 🧠 How the Control Loop Works
+## How the Control Loop Works
 
 Project Envelope follows a four-stage supervisory loop:
 
@@ -219,7 +219,7 @@ The current implementation additionally performs a lightweight safety surveillan
 
 ---
 
-## 🛡️ The Sentinel Gate
+## The Sentinel Gate
 
 The Sentinel Gate is the project's safety governor.
 
@@ -259,7 +259,7 @@ The threshold is calibrated from the observed score distribution and is used to 
 
 ---
 
-## 🔄 Reflective Self-Correction
+## Reflective Self-Correction
 
 A rejected AI proposal does not immediately terminate the control cycle.
 
@@ -292,7 +292,7 @@ This makes the system **self-correcting and explainable**, rather than simply ac
 
 ---
 
-## ⚡ Fast Safety Loop & Event-Triggered Reasoning
+## Fast Safety Loop & Event-Triggered Reasoning
 
 The current implementation separates fast physical safety surveillance from slower LLM reasoning.
 
@@ -316,7 +316,7 @@ This avoids unnecessary LLM calls while maintaining continuous physical safety s
 
 ---
 
-## 💾 Decision Cache
+## Decision Cache
 
 The current controller includes a state-bin decision cache.
 
@@ -363,7 +363,7 @@ This provides a more robust fallback architecture than relying on multiple API k
 
 ---
 
-## 📂 Directory Structure
+## Directory Structure
 
 ```text
 Envelope/
@@ -426,7 +426,7 @@ Envelope/
 
 ---
 
-## 📈 Measured Results
+## Measured Results
 
 Project Envelope tracks AI-gated energy performance against a parallel baseline EnergyPlus simulation.
 
@@ -478,7 +478,7 @@ These figures are **run-specific measurements**, not universal guarantees. Fresh
 
 ---
 
-## 📊 Project Dashboard
+## Project Dashboard
 
 The Streamlit dashboard provides live visibility into the interaction between EnergyPlus, the AI Strategist, the Sentinel Gate, and the baseline controller.
 
@@ -496,7 +496,7 @@ The Streamlit dashboard provides live visibility into the interaction between En
 
 ---
 
-## 🎥 Working Demo
+## Working Demo
 
 The following demo presents the live working system:
 
@@ -504,7 +504,7 @@ The following demo presents the live working system:
 
 ---
 
-## 🛡️ Safety & Failsafes
+## Safety & Failsafes
 
 Project Envelope is designed to **fail safe rather than fail silently**.
 
@@ -518,7 +518,7 @@ Project Envelope is designed to **fail safe rather than fail silently**.
 
 ---
 
-## 🔬 Verification & Testing
+## Verification & Testing
 
 The repository includes dedicated scripts for validating major parts of the architecture:
 
@@ -552,7 +552,7 @@ python scripts/check_css.py
 
 ---
 
-## 🏗️ Hardware Integration Path
+## Hardware Integration Path
 
 Project Envelope includes a defined path from the EnergyPlus digital twin to a real BMS environment through BACnet/IP.
 
@@ -574,7 +574,7 @@ A local virtual BACnet point is included for safe end-to-end testing before conn
 
 ---
 
-## 🌐 Beyond HVAC
+## Beyond HVAC
 
 The Sentinel Gate is designed as a reusable safety-governor pattern rather than an HVAC-only controller.
 
@@ -588,7 +588,7 @@ which demonstrates reuse of the Sentinel Gate architecture in a non-HVAC control
 
 ---
 
-## 🚀 Project Status
+## Project Status
 
 Project Envelope currently demonstrates:
 
@@ -611,3 +611,14 @@ Project Envelope currently demonstrates:
 **Project Envelope's core principle:**
 
 > **Let AI optimize the building — but never let AI bypass the safety governor.**
+
+---
+
+## Credentials
+
+**Project:** Project Envelope — AI-Gated BMS 
+**Team:** Team Duo  
+**Contributors:** Bedagya Bordoloi & Krishanu Deka  
+**Submitted to:** Prasunethon 2.0
+
+---
