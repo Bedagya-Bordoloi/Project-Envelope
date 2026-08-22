@@ -1,8 +1,6 @@
 """
 scripts/compare_models.py
 
-Blueprint 1.4 -- model justification (8B vs 70B).
-
 Pulls a representative sample of real (t_in, t_out, forecast, carbon)
 inputs from an existing control_log.jsonl, replays each one through
 agents.strategist.Strategist twice -- once per model -- and records
