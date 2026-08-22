@@ -5,26 +5,7 @@ Zero-network-dependency rule-based setback controller. Used whenever the
 Groq call times out, errors, or the Sentinel Gate rejects a corrected
 proposal a second time. Holds the building in-bounds indefinitely.
 
-BUGFIX (savings erosion / reversal in cold weather -- see chat): target_low_c
-/ target_high_c and every `setpoint` this project passes around (AI
-proposals, the baseline's fixed 22.0C, this controller's own return value)
-are all in "cooling-setpoint" framing -- core/energyplus_bridge.py always
-applies `heating_setpoint = setpoint - deadband_c/2` before actuating, so
-the REAL achieved indoor temp normally runs ~deadband_c/2 (1.0C by default)
-BELOW whatever setpoint value is being reasoned about. `current_temp` here
-is that real achieved temp (straight from the EnergyPlus sensor), so
-comparing it directly against target_low_c=21.0 meant a healthy,
-by-design winter reading of ~20.0-20.8C was misread as "too cold" on
-essentially every tick -- tripping Failsafe, which then jumped the
-setpoint straight up to baseline-equivalent (21.0 + setback 1.0 = 22.0,
-i.e. the SAME value baseline uses). That's what was quietly erasing (and
-eventually reversing) the AI's savings as the season got colder and
-Failsafe/rejections fired more often: it wasn't a real comfort emergency,
-it was the low-side threshold being off by one deadband-width. Fix:
-translate current_temp back into the same cooling-setpoint framing
-(current_temp + deadband_c/2) before comparing it to low/high, so a
-building that's exactly on-target under the deadband design reads as
-on-target here too, instead of perpetually "too cold."
+
 """
 
 
