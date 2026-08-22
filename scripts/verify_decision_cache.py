@@ -1,8 +1,6 @@
 """
 scripts/verify_decision_cache.py
 
-Rework Blueprint 5.5 -- Phase 1 verification.
-
 Standalone check for core/decision_cache.py AND its wiring into
 main.py's ProjectEnvelope.decide(). Deliberately does NOT require
 EnergyPlus, a Groq key, or a Gemini key -- it mocks EnergyPlusBridge and
