@@ -1,45 +1,6 @@
 """
 scripts/calibrate_ccs_sweep.py
 
-Blueprint 1.2 -- CCS calibration sweep.
-
-The existing scripts/calibrate_ccs.py (kept, unchanged) only computes
-mean/std of the CCS scores actually seen in ONE run at ONE threshold --
-that tells you about the distribution of scores, not about how the
-system *behaves* at a different threshold. This script does the real
-sweep the blueprint asks for: it re-runs the full AI pipeline once per
-candidate ccs_threshold, and for each run computes:
-
-  - approval rate      (AI-sourced rows / total rows)
-  - energy savings %   (vs. a baseline run you provide once, since the
-                        baseline schedule doesn't depend on ccs_threshold
-                        and re-running it per threshold would be wasted
-                        wall-clock time)
-  - comfort violations (rows where SentinelGate's PMV check failed --
-                        i.e. every row whose reason starts with
-                        "REJECTED: Violation", counted as a violation
-                        the AI PROPOSED, not one that reached the
-                        building -- the gate's whole job is to stop
-                        those before they're applied. If you want
-                        "violations that reached the zone" instead,
-                        post-filter calibration_report.csv's per-sweep
-                        logs/sweep/sweep_<t>.jsonl on actual t_in vs.
-                        your comfort band.)
-
-Usage:
-    # 1. Run the baseline once (not swept, doesn't depend on threshold):
-    python main.py --baseline
-
-    # 2. Run the sweep (each point re-runs the full AI pipeline -- this
-    #    is wall-clock-expensive; reduce --thresholds for a quick pass):
-    python scripts/calibrate_ccs_sweep.py --baseline-log logs/baseline/control_log.jsonl
-
-Produces:
-    logs/sweep/sweep_<threshold>.jsonl   (one full control log per point)
-    logs/sweep/calibration_report.csv    (the table)
-    logs/sweep/calibration_sweep.png     (the plot -- approval rate /
-                                           savings % / violations vs.
-                                           threshold, per blueprint 1.2)
 """
 
 import argparse
@@ -59,38 +20,9 @@ AI_LOG_PATH = "logs/ai/control_log.jsonl"
 SWEEP_DIR = "logs/sweep"
 
 DEFAULT_THRESHOLDS = [0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90]
-# FIX (Round-2 audit finding: "the gate's calibration story doesn't
-# account for the hard violation clause"): SentinelGate used to require
-# violation_severity == 0 no matter what ccs_threshold was set to, so a
-# threshold-only sweep could never show/explain long FAILSAFE streaks in
-# warm weather. core/sentinel_gate.py now reads a configurable
-# gate.max_violation_severity (default 0.0, i.e. identical to the old
-# hardcoded behavior). This script can now sweep that dimension too --
-# pass --violation-tolerances to opt in; default keeps the old
-# threshold-only behavior unchanged.
+
 DEFAULT_VIOLATION_TOLERANCES = [0.0]
 
-
-# BUGFIX (audit finding): the old version of this function did
-# `yaml.safe_load()` then `yaml.dump()` to change two numbers. PyYAML's
-# dumper does not preserve comments -- confirmed by actually running it
-# against config/building_policy.yaml, every one of the file's ~103
-# "FIX (Round-N audit)..." explanation comments (documenting *why*
-# cadence is 12, why enforce_baseline_direction matters, why the model
-# string changed, etc.) was silently deleted on the very first sweep
-# point, even at default settings, because the restore-on-exit logic
-# only restored the *values*, not the comments. That's permanent data
-# loss on a file the user was handed, on the very first run of this
-# script (or generate_evidence.py, which calls it).
-#
-# Fix: never round-trip the whole file through yaml.safe_load/yaml.dump
-# for a two-value change. Instead, do a targeted regex replace of just
-# the `ccs_threshold:` and `max_violation_severity:` value lines under
-# `gate:`, leaving every other byte of the file -- comments, key order,
-# blank lines, formatting -- untouched. Each key is matched by a
-# line-anchored regex (not a generic string search), so this can't
-# accidentally match an occurrence of the word inside a comment (e.g.
-# the sentence above that mentions "ccs_threshold" in prose).
 _CCS_THRESHOLD_FIELD_RE = re.compile(
     r"^(?P<prefix>[ \t]*ccs_threshold:[ \t]*)\S+(?P<suffix>.*)$",
     re.MULTILINE,
