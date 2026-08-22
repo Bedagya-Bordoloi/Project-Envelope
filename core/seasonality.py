@@ -1,25 +1,6 @@
 """
 core/seasonality.py
 
-Single source of truth for two things that were previously hardcoded in
-more than one place and had drifted out of sync with config/building_policy.yaml:
-
-1. Season classification (winter/summer/shoulder). This used to be a
-   literal `t_out < 14` / `t_out > 22` inline in
-   agents/strategist.py's _build_prompt(), while
-   config/building_policy.yaml's seasonality.winter_limit/summer_limit
-   sat there completely unread ("dead config" -- winter_limit had
-   drifted to a stale 12.0 that was never actually exercised, the same
-   class of bug as the earlier dead carbon-weight fix).
-
-2. The baseline setpoint the AI is supposed to beat. This was hardcoded
-   as the literal string "22.0C" in the Strategist's prompt instead of
-   reading policy["baseline"]["schedule_setpoint_c"] -- the one value
-   BaselineController itself actually uses.
-
-Both agents/strategist.py's prompt-building AND core/sentinel_gate.py's
-optional baseline-direction guardrail now import from here, so the two
-can no longer independently drift apart the way winter_limit did.
 """
 
 WINTER = "WINTER"
