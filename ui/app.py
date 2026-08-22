@@ -114,17 +114,6 @@ st.plotly_chart(fig, use_container_width=True)
 st.header("Explainable AI Decisions")
 display_df = ai_df[ai_df['source'].str.contains('AI|FAILSAFE', na=False)].tail(5).copy()
 
-# Rework Blueprint 5.6 -- Phase 5: "why this step triggered" column.
-# main.py already writes the raw ingredients into every control_log.jsonl
-# row -- core/trigger_engine.py's trigger_reason (deviation /
-# forecast_shift / schedule_boundary / max_staleness / cadence_ceiling /
-# initial_decision, i.e. why the SLOW LOOP woke up at all) and cache_hit
-# (whether that firing was served from core/decision_cache.py instead of
-# spending a real LLM call). This phase is presentation-only: fold both
-# into one human-readable column so a judge can see, at a glance, that
-# call volume is driven by real events and reuse -- not "we throttled
-# it" -- matching the blueprint's own framing in Section 8.
-#
 # A cache hit takes display priority over the raw trigger_reason: the
 # slow loop still fired for one of the real trigger reasons, but the
 # more useful fact for this column is that it was served WITHOUT a fresh
@@ -135,13 +124,7 @@ def _trigger_label(row):
     if bool(row.get("cache_hit")):
         return "cache_hit"
     trigger_reason = row.get("trigger_reason")
-    # BUGFIX: a mixed-type 'trigger_reason' column (real string reasons
-    # on slow-loop rows, None on quick_check rows -- see main.py) gets
-    # None silently coerced to float('nan') by pandas once the column is
-    # read back via pd.DataFrame(). `if trigger_reason:` treats NaN as
-    # truthy (it's a non-zero float), so quick_check rows rendered the
-    # literal string "nan" in this column instead of falling through to
-    # the source-based label below. pd.notna() is the correct check here.
+
     if pd.notna(trigger_reason) and trigger_reason:
         return trigger_reason
     source = row.get("source") or ""
@@ -154,12 +137,6 @@ for col in ("trigger_reason", "cache_hit"):
         display_df[col] = None
 display_df["trigger"] = display_df.apply(_trigger_label, axis=1)
 
-# FIX (see chat): every row was showing "(Fallback)" with no way to tell
-# WHY the real Groq call failed -- fallback_error is already captured by
-# agents/strategist.py and written into control_log.jsonl by main.py, but
-# this table was dropping it before it ever reached the screen. Surface
-# it only for rows that actually used the fallback, so a normal run
-# (llm_ok=True) doesn't get a distracting empty column.
 cols = ['step', 'source', 'trigger', 'setpoint', 'reason']
 if display_df['trigger'].isna().all():
     cols.remove('trigger')  # nothing to show yet (e.g. very start of a run) -- don't render a blank column
