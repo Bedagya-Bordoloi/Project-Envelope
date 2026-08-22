@@ -337,7 +337,7 @@ This reduces unnecessary LLM calls while preserving the safety-governor architec
 
 ---
 
-## 🔌 Multi-Provider Resilience
+## Multi-Provider Resilience
 
 The Strategist uses a configurable `ProviderPool`.
 
