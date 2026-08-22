@@ -1,32 +1,6 @@
 """
 demos/ev_charging_demo.py
 
-Blueprint Tier 3 -- generalization proof point.
-
-Honesty note vs. the blueprint's original suggestion: the blueprint's
-sample code treats SentinelGate as if it scored a simple min/max band,
-and suggests reusing it "unchanged" by repointing comfort.temp_min_c /
-temp_max_c at a charge-rate range. That doesn't hold anymore -- this
-repo's SentinelGate scores PMV thermal comfort (core/comfort.py), which
-takes temperature/humidity/radiant-temp inputs and returns a
-physiological comfort index. Feeding a charge-rate number into a PMV
-formula would produce SOME number, but not a meaningful one -- it isn't
-actually testing anything about panel capacity.
-
-So this demo reuses what's genuinely domain-agnostic instead of what
-only looks domain-agnostic: core.sentinel_gate.compute_ccs() (the
-weighted CCS formula) plus SentinelGate's HOLD/hysteresis state
-machine, via the new `violation_fn` plug point (see core/sentinel_gate.py).
-The violation function here is a real capacity-overage check, not a
-relabeled thermal comfort score. That is the actual claim Tier 3 is
-supposed to support: the GATING PATTERN generalizes across domains,
-not that human-thermal-comfort math secretly also describes EV
-charging.
-
-Usage:
-    python demos/ev_charging_demo.py
-Produces:
-    logs/ev_demo/ev_charging_log.jsonl
 """
 
 import json
@@ -57,17 +31,6 @@ MIN_CHARGE_KW = 0.0
 
 
 def capacity_violation_fn(proposed_kw, current_load_kw, _unused_humidity, load_ewma_kw):
-    """
-    violation_fn contract: (proposed, indoor_temp, humidity, t_out_ewma)
-        -> (severity, detail_dict, label_str)
-    Here the positional slots carry EV-domain meaning:
-        proposed_kw      = proposed charge rate
-        current_load_kw  = current site load excluding this charger
-        load_ewma_kw     = EWMA-smoothed site load (SentinelGate already
-                            tracks this via self._t_out_ewma / _update_ewma)
-    A violation is proposing more than the panel has headroom for, once
-    the smoothed existing site load is accounted for.
-    """
     total_kw = load_ewma_kw + proposed_kw
     headroom_kw = PANEL_CAPACITY_KW - total_kw
     if headroom_kw >= 0:
