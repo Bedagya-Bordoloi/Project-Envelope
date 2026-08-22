@@ -616,7 +616,6 @@ Project Envelope currently demonstrates:
 
 ## Credentials
 
-**Project:** Project Envelope — AI-Gated BMS 
 **Team:** Team Duo  
 **Contributors:** Bedagya Bordoloi & Krishanu Deka  
 **Submitted to:** Prasunethon 2.0
