@@ -1,0 +1,11 @@
+groq>=0.11.0
+openai>=1.40.0  # secondary_provider tier (e.g. Gemini's OpenAI-compat endpoint) -- see agents/strategist.py Strategist.__init__
+python-dotenv>=1.0.1
+PyYAML>=6.0.1
+streamlit>=1.38.0
+plotly>=5.24.0
+pandas>=2.2.0
+matplotlib>=3.8.0  # scripts/calibrate_ccs_sweep.py, scripts/find_forecast_spike.py, scripts/summarize_multizone.py
+pythermalcomfort>=2.10.0,<4.0.0
+mcp>=1.0.0
+BAC0>=2024.0  # optional -- only needed if config/building_policy.yaml's bacnet.enabled is true
