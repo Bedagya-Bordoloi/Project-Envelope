@@ -1,46 +1,12 @@
 """
 scripts/patch_idf.py
 
-CRITICAL FINDING beyond the code bugs: models/baseline.idf is the stock
-EnergyPlus "1ZoneUncontrolled" example file. It contains a Zone object and
-envelope surfaces, but literally zero HVAC objects - no
-ZoneControl:Thermostat, no ZoneHVAC:EquipmentConnections, no conditioning
-equipment of any kind. That's *why* indoor temp tracked outdoor temp 1:1
-in the demo log (down to -18C): there was never anything in the building
-model capable of holding a setpoint, regardless of what the Python side
-does. Even with every code fix applied, `get_actuator_handle(..., "Zone
-Temperature Control", "Cooling Setpoint", ...)` will return -1 forever
-against this file.
-
-This script appends a minimal-but-real HVAC system to a COPY of
-baseline.idf (never edits the original, so it stays valid as the
-untouched baseline for Feature 2's comparison):
-  - ScheduleTypeLimits: Temperature, Control Type
-  - Schedule:Compact: constant heating/cooling setpoint schedules + a
-    dual-setpoint control-type schedule
-  - ThermostatSetpoint:DualSetpoint
-  - ZoneControl:Thermostat  (this is what makes the
-    "Zone Temperature Control"/"Cooling Setpoint" actuator exist)
-  - Zone air/return nodes, NodeList, ZoneHVAC:EquipmentConnections
-  - ZoneHVAC:IdealLoadsAirSystem + ZoneHVAC:EquipmentList
-    (a textbook "perfect" HVAC unit - satisfies the thermostat setpoint
-    exactly, which is standard practice for control-algorithm testing
-    where you want to isolate the control logic from a specific chiller/
-    coil model)
-
-Usage:
-    python scripts/patch_idf.py
-Produces:
-    models/controlled.idf
-    models/two_zone_controlled.idf   (Blueprint 1.1, see below)
-
 Point the AI-controlled EnergyPlusBridge instance at controlled.idf.
 Keep baseline.idf as-is for whatever you use as the comparison instance
 (see README.md for why you likely want a THIRD file - a schedule-only
 baseline - rather than the literally-uncontrolled original, if you want
 Feature 2's "baseline vs AI" comparison to mean anything energy-wise).
 
---- Blueprint 1.1: two-zone controlled model ---
 The blueprint's suggested path was to lift two zone definitions out of
 EnergyPlus's stock 5ZoneAirCooled.idf example. That file isn't available
 in this environment (no EnergyPlus install/example-files directory here,
