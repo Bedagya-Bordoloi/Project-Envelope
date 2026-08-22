@@ -1,66 +1,5 @@
 """
 core/energyplus_bridge.py
-
-Fix vs. the previous version (on top of the heating-actuator / humidity /
-energy-metering fixes already in place):
-
-4. DUPLICATE-CALLBACK / STEP-INFLATION BUG: "callback_begin_system_timestep
-   _before_predictor" is NOT guaranteed to fire exactly once per zone
-   timestep. EnergyPlus internally subdivides a zone timestep into shorter
-   HVAC "system timesteps" when the system needs finer resolution to
-   converge — which happens most during exactly the conditions you'd
-   expect (large temp swings, setpoint changes). Every one of those
-   sub-firings was previously incrementing step_counter and calling
-   log_step(), which is why:
-     - the sidebar's "AI Control Step" (last row's step value) could read
-       ~8x higher than the actual number of rows in the log/chart,
-     - the AI and baseline instances' step counts were never comparable
-       (each accumulates sub-steps at a different, weather-dependent
-       rate),
-     - cadence_steps in the policy ("call the Strategist every N steps")
-       fired at wildly uneven real-simulated-time intervals instead of a
-       consistent cadence,
-     - the outdoor-temp line looked like dense noise instead of a clean
-       diurnal curve — it's real data, just heavily oversampled during
-       transients.
-
-   Fix: track api.exchange.current_sim_time(state) (cumulative simulated
-   hours since the run started) and skip the callback body entirely if
-   it fires again for the same simulated instant. step_counter now
-   advances once per distinct simulated moment, which makes it directly
-   comparable between the AI and baseline processes and makes
-   cadence_steps behave as documented.
-
-5. MULTI-ZONE SUPPORT (Blueprint 1.1): this used to hardcode a single
-   `zone_name`, so `decision_callback` was always called once per
-   distinct simulated timestep with one zone's readings. It now accepts
-   `zone_names: list[str]` and, on every distinct simulated timestep,
-   resolves handles / reads state / applies actuators independently for
-   EACH zone in the list, calling `decision_callback(t_in, t_out,
-   humidity, zone_name=<zone>)` once per zone. This is what lets
-   main.py's --multizone mode run a fully separate Strategist +
-   SentinelGate + FailsafeController stack per zone -- each zone gets its
-   own proposal and its own accept/reject decision on the same tick,
-   instead of one decision applied to every zone.
-
-   Backward compatibility: the old `zone_name` (singular) constructor
-   kwarg still works and is treated as `zone_names=[zone_name]`. Existing
-   single-zone callers (main.py's default `python main.py` / `--baseline`
-   paths) are unaffected -- they still get exactly one zone_name in the
-   callback, and main.py passes it as an optional kwarg those callbacks
-   already accept.
-
-   Per-zone energy metering caveat: `Output:Meter` facility meters
-   (used for `cumulative_kwh`) are building-wide, not per-zone, so
-   `cumulative_kwh` stays a single combined total even in multi-zone
-   mode -- it is NOT split per zone. This bridge additionally attempts,
-   best-effort, to read each zone's own "Zone Ideal Loads Supply Air
-   Total {Heating,Cooling} Energy" output variable (real per-zone
-   numbers, since every zone here uses a ZoneHVAC:IdealLoadsAirSystem)
-   via `exchange.request_variable` if that API is available in the
-   installed EnergyPlus version; where it isn't, `zone_kwh[zone]` simply
-   stays at 0.0 and a one-time warning is printed, and only the combined
-   `cumulative_kwh` figure is meaningful.
 """
 
 import sys
@@ -214,19 +153,8 @@ class EnergyPlusBridge:
         self._energy_meter_warned = False
         self._per_zone_energy_warned = False
 
-        # THE FIX: last simulated instant we actually processed. Used to
-        # skip repeat callback firings for the same simulated timestep.
         self._last_sim_time_key = None
 
-        # FIX (audit finding: "wall-clock infeasible with zero terminal
-        # feedback"): a full-year AI run does thousands of Strategist
-        # calls paced by the rate limiter and can legitimately take
-        # hours; before this, nothing printed between "starting" and
-        # "done", which is indistinguishable from a hang. Print a cheap
-        # heartbeat (simulated day + real elapsed time) on a real-time
-        # interval, not a step-count interval, so it stays useful
-        # whether the run is fast (short --run-period-days) or slow
-        # (full year).
         self._heartbeat_interval_s = 30.0
         self._last_heartbeat_t = time.perf_counter()
         self._run_start_t = time.perf_counter()
@@ -301,12 +229,6 @@ class EnergyPlusBridge:
                       f"variable not found for zone '{zone}'; PMV comfort "
                       f"scoring will fall back to a fixed 50% RH assumption.")
 
-            # Best-effort per-zone Ideal Loads energy (see fix note #5).
-            # request_variable() was called (if available) in run(), before
-            # warmup, so the handle lookup here can succeed; if the API
-            # doesn't support runtime requests, these two stay -1 and
-            # per-zone kWh silently stays 0.0 -- the combined
-            # cumulative_kwh figure is unaffected either way.
             ideal_heat_h = self.api.exchange.get_variable_handle(
                 state_ptr, "Zone Ideal Loads Supply Air Total Heating Energy", zone
             )
@@ -388,13 +310,6 @@ class EnergyPlusBridge:
         if self.api.exchange.warmup_flag(state_ptr):
             return
 
-        # THE FIX: this callback can legitimately fire more than once for
-        # the same simulated instant (EnergyPlus subdividing a zone
-        # timestep into shorter HVAC system timesteps). Only process the
-        # first firing for each distinct simulated time; skip repeats.
-        # This is what was previously inflating step_counter (and every
-        # log row) by roughly an order of magnitude, and made AI vs
-        # baseline step counts incomparable.
         sim_time_key = round(self.api.exchange.current_sim_time(state_ptr), _SIM_TIME_ROUND_DP)
         if sim_time_key == self._last_sim_time_key:
             return
@@ -417,21 +332,6 @@ class EnergyPlusBridge:
         t_out = self.api.exchange.get_variable_value(state_ptr, self._t_out_handle)
         self.last_outdoor_temp = t_out
 
-        # Cumulative energy (kWh), summed every distinct timestep so it's
-        # a running total by the time this shows up on the dashboard.
-        # (Also fixed by the dedupe above — this was previously double/
-        # triple-counting the same real energy draw across repeat
-        # firings for the same simulated instant.) This is a FACILITY
-        # total -- combined across every zone, even in multi-zone mode.
-        # BUGFIX (Part 1b -- see chat): heat and cool were summed into one
-        # step_j/cumulative_kwh figure, which is exactly what let the
-        # cooling-ceiling bug (Part 1a) hide inside a single "Live
-        # Savings %" number with no way to see which side of the deadband
-        # was actually driving it. Track both components separately so
-        # cumulative_heat_kwh / cumulative_cool_kwh can be logged and
-        # compared AI-vs-baseline directly. cumulative_kwh is kept as
-        # their sum for backward compatibility with existing dashboard/
-        # log-reading code.
         if self.track_energy:
             heat_j = 0.0
             cool_j = 0.0
@@ -443,10 +343,6 @@ class EnergyPlusBridge:
             self.cumulative_cool_kwh += cool_j / 3_600_000.0
             self.cumulative_kwh = self.cumulative_heat_kwh + self.cumulative_cool_kwh
 
-        # Fix note #5: loop per zone. Each zone gets its own SENSE (read
-        # its own t_in/humidity) -> REASON/VERIFY (main.py's callback,
-        # which for --multizone owns one Strategist+Gate+Failsafe stack
-        # PER zone) -> ACT (apply that zone's own actuators).
         for zone in self.zone_names:
             h = self._zone_handles[zone]
             t_in = self.api.exchange.get_variable_value(state_ptr, h["t_in"])
@@ -473,12 +369,6 @@ class EnergyPlusBridge:
             cooling_setpoint = setpoint
             heating_setpoint = setpoint - (self.deadband_c / 2.0)
             clamped = False
-            # BUGFIX (cooling-ceiling guardrail -- see constructor docstring
-            # and chat): a winter proposal chosen purely for heating-side
-            # savings also lowers the cooling ceiling below baseline's,
-            # letting the AI draw cooling energy baseline never would.
-            # Clamp so the side of the deadband the proposal WASN'T
-            # reasoning about can never end up worse than baseline's.
             if self.policy is not None:
                 season = classify_season(t_out, self.policy)
                 baseline_setpoint = get_baseline_setpoint(self.policy)
@@ -498,9 +388,7 @@ class EnergyPlusBridge:
                 "setpoint": setpoint, "source": source,
                 "cooling_ceiling_clamped": clamped,
             }
-            # Back-compat single-zone accessors: reflect the LAST zone
-            # processed this tick (identical to before when there's only
-            # one zone).
+
             self.last_indoor_temp = t_in
             self.last_humidity = humidity
             self.last_setpoint = setpoint
@@ -516,13 +404,7 @@ class EnergyPlusBridge:
         self.api.runtime.callback_begin_system_timestep_before_predictor(
             self.state, self._callback
         )
-        # Best-effort: ask for each zone's own Ideal Loads energy output
-        # variables at runtime (fix note #5) so _resolve_handles() can
-        # later find a valid handle for them. Must happen before the
-        # simulation starts -- request_variable() only exists in newer
-        # EnergyPlus Python API versions, so this is guarded and silent
-        # if unavailable (per-zone kWh then just stays 0.0; the combined
-        # cumulative_kwh figure is unaffected either way).
+
         if self.track_energy and hasattr(self.api.exchange, "request_variable"):
             for zone in self.zone_names:
                 try:
