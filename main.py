@@ -47,22 +47,6 @@ def _quick_idf_path(idf_path, days):
     return patch_run_period(idf_path, out_path, end_date.month, end_date.day)
 
 def _reset_control_log(path):
-    """BUGFIX (savings spike/decay after a restart -- see chat): every
-    log write elsewhere in this file uses open(path, "a") -- correct for
-    appending WITHIN a run, but nothing ever cleared the file BETWEEN
-    runs. EnergyPlusBridge.step_counter and cumulative_kwh always start
-    fresh at 0 for a new process, but the log file didn't -- so
-    restarting `python main.py` kept appending a new step-0 sequence
-    onto whatever an earlier run (possibly a completed full year) had
-    already written. ui/app.py's dashboard then aligns AI/Baseline by
-    "the last row at or before the shared step," which picks up the
-    freshly-restarted run's tiny early cumulative_kwh against a stale
-    high-step-count row from the OTHER log, producing exactly the
-    "98% savings, then rapidly decaying" pattern -- a log-mixing
-    artifact, not a real result. Truncating here means every fresh
-    `python main.py` (or --baseline) invocation starts this mode's log
-    at a clean, single, self-consistent run.
-    """
     open(path, "w").close()
 
 
@@ -74,45 +58,16 @@ class ProjectEnvelope:
         _reset_control_log(control_log_path)
         self.gate = SentinelGate(policy)
         self.failsafe = FailsafeController(policy)
-        # FIX: policy now threaded through so the Strategist reads real
-        # season thresholds / baseline value instead of hardcoding them
-        # (see agents/strategist.py, core/seasonality.py).
         self.strategist = Strategist(model=policy["strategist"]["model"], policy=policy)
-        self.cadence_steps = policy["strategist"]["cadence_steps"]
-        # FIX (dead config): policy["strategist"]["call_timeout_s"]/
-        # "correction_timeout_s" were declared in building_policy.yaml
-        # but never actually reached Strategist.decide() -- both calls
-        # below used decide()'s hardcoded default (timeout=10) instead.
-        # Read once here so the values in the YAML are the values
-        # actually used.
+        self.cadence_steps = policy["strategist"]["cadence_steps"]  
         self.call_timeout_s = float(policy["strategist"].get("call_timeout_s", 10))
         self.correction_timeout_s = float(policy["strategist"].get("correction_timeout_s", 5))
-        # Priority 3a: see config/building_policy.yaml's strategist.correction_skip_delta_c.
         self.correction_skip_delta_c = float(policy["strategist"].get("correction_skip_delta_c", 0.0))
-        # Rework Blueprint 5.5 -- Phase 1: state-bin decision cache. See
-        # core/decision_cache.py's module docstring for the full
-        # reasoning; wired in below inside decide().
         self.decision_cache = DecisionCache(policy)
-        # Rework Blueprint 5.2 -- Phase 2: event-triggered scheduler. See
-        # core/trigger_engine.py's module docstring for the full
-        # reasoning; wired in below inside decide(), replacing the old
-        # `step % self.cadence_steps != 0: return ..., "Holding"` gate.
         self.trigger_engine = TriggerEngine(policy)
-        # Rework Blueprint 5.2: with firings no longer tied to fixed
-        # cadence, "cadence ticks" (the unit core/decision_cache.py's
-        # ttl_ticks is expressed in) now means "slow-loop firings" --
-        # incremented once per decide() call that actually reaches the
-        # cache/Strategist below, regardless of what triggered it.
         self._decision_counter = 0
         self.timestep_minutes = float(policy["strategist"].get("timestep_minutes", 15))
         self.last_setpoint = 22.0
-        # Rework Blueprint 5.3 -- Phase 3: the currently-committed
-        # trajectory (list of {"offset_min","setpoint"} anchors, sorted
-        # ascending) the fast loop interpolates between on every physical
-        # step where the slow loop does NOT fire, plus the physical step
-        # at which it was committed (interpolation offsets are measured
-        # from here). None until the first real decision -- see
-        # _interpolate_trajectory()/_set_flat_trajectory() below.
         self._trajectory = None
         self._trajectory_start_step = 0
         self._bridge = None
@@ -125,35 +80,10 @@ class ProjectEnvelope:
         return carbon_intensity_level(step, self.policy)
 
     def _set_flat_trajectory(self, step, setpoint):
-        """Rework Blueprint 5.3: reset the committed trajectory to a
-        single flat anchor at `setpoint`, starting now. Used whenever
-        this tick's outcome is NOT a freshly-approved trajectory (a
-        quick_check trip, a FAILSAFE override, a skipped/failed
-        correction) -- the fast loop must not keep interpolating toward a
-        stale plan that was superseded by a safety override, so this
-        gives it a safe, unambiguous "just hold here" target instead."""
         self._trajectory = [{"offset_min": 0.0, "setpoint": float(setpoint)}]
         self._trajectory_start_step = step
 
     def _interpolate_trajectory(self, step):
-        """Rework Blueprint 5.3 -- the fast loop's half of the two-clock
-        architecture. Called on every physical step where the slow loop
-        does NOT fire this tick (the "Holding" path in decide() below) so
-        the actuator glides between the last committed trajectory's
-        anchors instead of holding perfectly flat until the next
-        trigger/cadence fire and then jumping.
-
-        Deliberately does NOT re-invoke SentinelGate: the trajectory was
-        already approved as a whole when its offset_min=0 anchor cleared
-        the gate (see decide() below) -- interpolating between two
-        already-approved-adjacent anchors is a pure fast-loop control
-        action, not a new AI decision. The result IS still clamped to the
-        gate's hard safety band (temp_min_c/temp_max_c), the same
-        Blueprint 5.1 "local deterministic safety check" spirit as
-        quick_check(), since only the offset_min=0 anchor was individually
-        gate-checked -- later anchors came from the same tool call and
-        were never independently verified against the hard bounds.
-        """
         if not self._trajectory:
             return self.last_setpoint
 
@@ -180,12 +110,6 @@ class ProjectEnvelope:
 
     @staticmethod
     def _tag_source(label, llm_ok):
-        # Fix (silent-fallback visibility): previously every approved
-        # proposal was logged as plain "AI"/"AI (Corrected)" regardless of
-        # whether it came from a real Groq tool-call or the hardcoded
-        # physical-target fallback. The whole year-long log turned out to
-        # be indistinguishable either way -- this is what makes them
-        # distinguishable again.
         return label if llm_ok else f"{label} (Fallback)"
 
     def decide(self, t_in, t_out, humidity, zone_name=None):
@@ -197,35 +121,10 @@ class ProjectEnvelope:
         # otherwise. Recorded in the log line purely for traceability.
         step = self._bridge.step_counter
 
-        # Rework Blueprint 5.1 -- Phase 0: fast-loop safety net. Runs on
-        # EVERY physical step, unconditionally, BEFORE the cadence gate
-        # below -- this is what makes the system genuinely "24/7
-        # surveillance" rather than surveillance-only-at-reasoning-time.
-        # Deliberately placed ahead of the cadence check: the old code
-        # returned early on non-cadence steps with zero verification at
-        # all, so a real drift between cadence ticks would go completely
-        # unwatched until the next scheduled LLM call. See
-        # SentinelGate.quick_check()'s docstring for the full reasoning.
-        # Cheap by construction (no LLM call, no PMV/CCS scoring) so
-        # running it every step is not a performance concern.
         quick_tripped, quick_reason = self.gate.quick_check(t_in)
         if quick_tripped:
             self.last_setpoint = self.failsafe.decide(t_in)
-            # Rework Blueprint 5.3: a quick_check trip is a hard safety
-            # override -- the fast loop must not keep interpolating
-            # toward whatever trajectory was in flight before the trip
-            # (it may be exactly what caused the drift). Reset to a flat
-            # hold at the safe failsafe value so post-trip Holding steps
-            # resume from here, not from a stale plan.
             self._set_flat_trajectory(step, self.last_setpoint)
-            # NOT run through _tag_source(): that helper's "(Fallback)"
-            # suffix specifically means "the LLM was asked and failed."
-            # A quick_check trip never asks the LLM anything at this tick
-            # at all -- it's a pre-emptive hard-bounds intervention, not
-            # an LLM fallback. Keeping the label distinct matters for the
-            # explainability log (Blueprint Section 2 / 5.6): a judge
-            # reading the log should be able to tell "the LLM failed" and
-            # "the fast safety loop caught a real drift" apart at a glance.
             source = "FAILSAFE (QuickCheck)"
             log_entry = {
                 "step": int(step), "t_in": round(t_in, 2), "t_out": round(t_out, 2),
@@ -259,14 +158,6 @@ class ProjectEnvelope:
         hour_of_day = (step * self.timestep_minutes / 60.0) % 24.0
         season = classify_season(t_out, self.policy)
 
-        # Rework Blueprint 5.2 -- Phase 2: event-triggered scheduler,
-        # replacing the old `if step % self.cadence_steps != 0: return
-        # ..., "Holding"` gate. Fires the slow loop on deviation /
-        # forecast-shift / schedule-boundary / max-staleness instead of
-        # blind fixed cadence -- see core/trigger_engine.py's module
-        # docstring. A disabled trigger engine (strategist.trigger.
-        # enabled: false) reproduces the exact old fixed-cadence
-        # behavior via its own cadence_ceiling fallback.
         should_fire, trigger_reason = self.trigger_engine.evaluate(step, t_in, t_out, hour_of_day, season)
         if not should_fire:
             # Rework Blueprint 5.3: the fast loop interpolates along the
@@ -277,23 +168,11 @@ class ProjectEnvelope:
 
         forecast = self._bridge.get_forward_weather(3)
         carbon = self._get_carbon_intensity(step)
-        # Fix: carbon_score is now a real numeric value derived from the
-        # same "Low/Medium/High" label the Strategist sees, and gets
-        # threaded into gate.check() below -- previously nothing was
-        # passed and the gate's carbon term was a hardcoded constant.
         carbon_score = carbon_score_from_level(carbon, self.policy)
         # Fed to the gate's opt-in baseline-direction guardrail below --
         # see core/seasonality.py and config/building_policy.yaml's
         # gate.enforce_baseline_direction (off by default).
         baseline_setpoint = get_baseline_setpoint(self.policy)
-
-        # Rework Blueprint 5.5 -- Phase 1: state-bin decision cache.
-        # tick_index counts SLOW-LOOP FIRINGS (see self._decision_counter's
-        # comment in __init__), matching the same convention
-        # hysteresis.min_dwell_steps already uses (a monotonically
-        # increasing "how many decisions have happened" counter, not raw
-        # physical steps) -- see core/decision_cache.py's module docstring
-        # for why that unit matters.
         self._decision_counter += 1
         tick_index = self._decision_counter
         cache_key_args = (t_in, t_out, hour_of_day, season)
@@ -338,10 +217,6 @@ class ProjectEnvelope:
 
             if outcome == "APPROVED":
                 self.last_setpoint = proposal["setpoint"]
-                # Rework Blueprint 5.3: commit the approved trajectory
-                # (or a degenerate 1-anchor one -- see
-                # agents/strategist.py's _parse_trajectory()) for the
-                # fast loop to interpolate along until the next firing.
                 self._trajectory = proposal.get("trajectory") or [
                     {"offset_min": 0.0, "setpoint": proposal["setpoint"]}]
                 self._trajectory_start_step = step
@@ -354,21 +229,8 @@ class ProjectEnvelope:
                 source = self._tag_source("AI (Stabilized)", llm_ok)
                 final_ccs = 1.0
             else:
-                # Rework Blueprint 5.5: a cached proposal that gets
-                # REJECTED on replay means this state bin's cached
-                # decision is no longer trustworthy -- drop it immediately
-                # rather than letting other ticks landing in the same bin
-                # keep reusing a decision that just failed re-verification.
                 if cache_hit:
                     self.decision_cache.invalidate(*cache_key_args)
-                # Priority 3a: a REJECTED proposal that's already within
-                # correction_skip_delta_c of the current setpoint is very
-                # unlikely to be meaningfully rescued by a second real LLM
-                # call -- skip it and go straight to FAILSAFE, saving the
-                # tokens for ticks with an actual chance of a corrected
-                # APPROVED outcome. Delta is measured against the FIRST
-                # proposal (the one that was just rejected), not a guess
-                # at what the correction pass would have returned.
                 delta = abs(proposal["setpoint"] - self.last_setpoint)
                 if self.correction_skip_delta_c > 0 and delta <= self.correction_skip_delta_c:
                     self.last_setpoint, source = self.failsafe.decide(t_in), "FAILSAFE"
@@ -391,11 +253,6 @@ class ProjectEnvelope:
                     final_ccs = ccs2
                     if outcome2 == "APPROVED":
                         self.last_setpoint, source, reason = corrected["setpoint"], self._tag_source("AI (Corrected)", llm_ok), reason2
-                        # Same Blueprint 5.5 rule as the first-attempt path:
-                        # only ever cache an already-APPROVED, post-gate
-                        # proposal -- a corrected proposal that clears the
-                        # gate is just as legitimate a cache entry as a
-                        # first-attempt one.
                         self._trajectory = corrected.get("trajectory") or [
                             {"offset_min": 0.0, "setpoint": corrected["setpoint"]}]
                         self._trajectory_start_step = step
@@ -407,15 +264,6 @@ class ProjectEnvelope:
             self.last_setpoint, source, reason = self.failsafe.decide(t_in), "FAILSAFE", f"Error: {e}"
             self._set_flat_trajectory(step, self.last_setpoint)
 
-        # Rework Blueprint 5.2: record this as the new "last decision"
-        # reference point for the trigger engine's NEXT evaluate() call,
-        # regardless of how this tick's decision resolved (cache hit,
-        # real LLM call, correction, or an exception falling through to
-        # FAILSAFE) -- the slow loop DID run this step, so the drift
-        # clock genuinely resets here. Deliberately outside the try/
-        # except above: a FAILSAFE-via-exception outcome still means the
-        # slow loop consumed this event, and the next evaluate() should
-        # measure drift from here, not from whenever it last succeeded.
         self.trigger_engine.note_decision(step, t_in, t_out, hour_of_day, season)
 
         # 4. Logging
@@ -425,9 +273,6 @@ class ProjectEnvelope:
             "ccs": round(final_ccs, 3) if final_ccs is not None else None,
             "lookahead_triggered": lookahead_triggered,
             "cumulative_kwh": round(self._bridge.cumulative_kwh, 4),
-            # Part 1b: split so a cooling-ceiling clamp event (Part 1a)
-            # is directly verifiable in kWh, not just inferred from the
-            # combined total.
             "cumulative_heat_kwh": round(self._bridge.cumulative_heat_kwh, 4),
             "cumulative_cool_kwh": round(self._bridge.cumulative_cool_kwh, 4),
             "zone": zone_name or self._bridge.zone_names[0],
@@ -438,34 +283,10 @@ class ProjectEnvelope:
             # returns before this point.
             "llm_ok": llm_ok,
             "fallback_error": fallback_error,
-            # Rework Blueprint 5.5: whether this tick's proposal came from
-            # the state-bin cache instead of a real Strategist/LLM call --
-            # makes the cache's effect directly verifiable in the log
-            # instead of only inferrable from call counts.
             "cache_hit": cache_hit,
-            # Rework Blueprint 5.2: why the slow loop fired this step
-            # (deviation / forecast_shift / schedule_boundary /
-            # max_staleness / cadence_ceiling / initial_decision) -- see
-            # core/trigger_engine.py. This is the raw data Phase 5 (5.6)
-            # will surface as a dedicated dashboard column; captured here
-            # already since it's a direct byproduct of this phase's wiring.
             "trigger_reason": trigger_reason,
-            # Rework Blueprint 5.3: the trajectory committed THIS tick
-            # (list of {"offset_min","setpoint"} anchors) -- what
-            # main.py's fast loop will interpolate along on subsequent
-            # "Holding" steps until the next slow-loop firing. None only
-            # if something failed before any trajectory (even a flat
-            # fallback one) was set, which should not be reachable.
             "trajectory": self._trajectory,
         }
-        # BUGFIX (defense in depth): this write happens after the try/except
-        # above, so it wasn't itself protected -- any serialization hiccup
-        # here (e.g. a stray NaN/Inf slipping into the dict) would propagate
-        # straight up through EnergyPlusBridge._callback and kill the whole
-        # simulation, which is indistinguishable from "the AI instance
-        # crashed" to anyone watching the dashboard. Never let logging
-        # itself be why a physically-safe decision (self.last_setpoint is
-        # already resolved by this point) fails to reach the actuator.
         try:
             with open(self.control_log_path, "a") as f:
                 f.write(json.dumps(log_entry) + "\n")
@@ -487,18 +308,6 @@ class BaselineOrchestrator:
     def decide(self, t_in, t_out, humidity, zone_name=None):
         step = self._bridge.step_counter
         setpoint = self.controller.decide(t_in)
-        # BUGFIX (audit finding: baseline runs reported "stopping"/
-        # freezing mid-run): unlike ProjectEnvelope.decide(), which wraps
-        # its own control_log_path write in try/except so a transient I/O
-        # hiccup can never propagate out of the callback, this write was
-        # unprotected -- any failure here (disk full, permission hiccup,
-        # a stray non-JSON-serializable value) would raise straight up
-        # through EnergyPlusBridge._callback and into the EnergyPlus C
-        # callback, which typically aborts the WHOLE simulation rather
-        # than showing a normal Python traceback -- indistinguishable
-        # from "it just stopped." A physically-safe setpoint has already
-        # been decided by this point; logging failing is never a reason
-        # to take down the run.
         try:
             with open(self.control_log_path, "a") as f:
                 f.write(json.dumps({"step": int(step), "t_in": t_in, "t_out": t_out, "setpoint": setpoint,
